@@ -1,8 +1,9 @@
 const path = require('node:path');
 const fs = require('fs-extra');
-const chalk = require('chalk');
 const { XmlHandler } = require('../../../lib/xml-handler');
+const prompts = require('../../../lib/prompts');
 const { getSourcePath } = require('../../../lib/project-root');
+const { BMAD_FOLDER_NAME } = require('./shared/path-utils');
 
 /**
  * Base class for IDE-specific setup
@@ -18,6 +19,24 @@ class BaseIdeSetup {
     this.configFile = null; // Override in subclasses when detection is file-based
     this.detectionPaths = []; // Additional paths that indicate the IDE is configured
     this.xmlHandler = new XmlHandler();
+    this.bmadFolderName = BMAD_FOLDER_NAME; // Default, can be overridden
+  }
+
+  /**
+   * Set the bmad folder name for placeholder replacement
+   * @param {string} bmadFolderName - The bmad folder name
+   */
+  setBmadFolderName(bmadFolderName) {
+    this.bmadFolderName = bmadFolderName;
+  }
+
+  /**
+   * Get the agent command activation header from the central template
+   * @returns {string} The activation header text
+   */
+  async getAgentCommandHeader() {
+    const headerPath = getSourcePath('utility', 'agent-components', 'agent-command-header.md');
+    return await fs.readFile(headerPath, 'utf8');
   }
 
   /**
@@ -34,18 +53,31 @@ class BaseIdeSetup {
    * Cleanup IDE configuration
    * @param {string} projectDir - Project directory
    */
-  async cleanup(projectDir) {
+  async cleanup(projectDir, options = {}) {
     // Default implementation - can be overridden
     if (this.configDir) {
       const configPath = path.join(projectDir, this.configDir);
       if (await fs.pathExists(configPath)) {
-        const bmadRulesPath = path.join(configPath, 'bmad');
+        const bmadRulesPath = path.join(configPath, BMAD_FOLDER_NAME);
         if (await fs.pathExists(bmadRulesPath)) {
           await fs.remove(bmadRulesPath);
-          console.log(chalk.dim(`Removed ${this.name} BMAD configuration`));
+          if (!options.silent) await prompts.log.message(`Removed ${this.name} BMAD configuration`);
         }
       }
     }
+  }
+
+  /**
+   * Install a custom agent launcher - subclasses should override
+   * @param {string} projectDir - Project directory
+   * @param {string} agentName - Agent name (e.g., "fred-commit-poet")
+   * @param {string} agentPath - Path to compiled agent (relative to project root)
+   * @param {Object} metadata - Agent metadata
+   * @returns {Object|null} Info about created command, or null if not supported
+   */
+  async installCustomAgentLauncher(projectDir, agentName, agentPath, metadata) {
+    // Default implementation - subclasses can override
+    return null;
   }
 
   /**
@@ -105,7 +137,7 @@ class BaseIdeSetup {
     // Get module agents
     const entries = await fs.readdir(bmadDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_cfg' && entry.name !== 'agents') {
+      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_config' && entry.name !== 'agents') {
         const moduleAgentsPath = path.join(bmadDir, entry.name, 'agents');
         if (await fs.pathExists(moduleAgentsPath)) {
           const moduleAgents = await this.scanDirectory(moduleAgentsPath, '.md');
@@ -177,7 +209,7 @@ class BaseIdeSetup {
     // Get module tasks
     const entries = await fs.readdir(bmadDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_cfg' && entry.name !== 'agents') {
+      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_config' && entry.name !== 'agents') {
         const moduleTasksPath = path.join(bmadDir, entry.name, 'tasks');
         if (await fs.pathExists(moduleTasksPath)) {
           const moduleTasks = await this.scanDirectoryWithStandalone(moduleTasksPath, ['.md', '.xml']);
@@ -223,7 +255,7 @@ class BaseIdeSetup {
     // Get module tools
     const entries = await fs.readdir(bmadDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_cfg' && entry.name !== 'agents') {
+      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_config' && entry.name !== 'agents') {
         const moduleToolsPath = path.join(bmadDir, entry.name, 'tools');
         if (await fs.pathExists(moduleToolsPath)) {
           const moduleTools = await this.scanDirectoryWithStandalone(moduleToolsPath, ['.md', '.xml']);
@@ -269,7 +301,7 @@ class BaseIdeSetup {
     // Get module workflows
     const entries = await fs.readdir(bmadDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_cfg' && entry.name !== 'agents') {
+      if (entry.isDirectory() && entry.name !== 'core' && entry.name !== '_config' && entry.name !== 'agents') {
         const moduleWorkflowsPath = path.join(bmadDir, entry.name, 'workflows');
         if (await fs.pathExists(moduleWorkflowsPath)) {
           const moduleWorkflows = await this.findWorkflowYamlFiles(moduleWorkflowsPath);
@@ -315,18 +347,20 @@ class BaseIdeSetup {
       } else if (entry.isFile() && entry.name === 'workflow.yaml') {
         // Read workflow.yaml to get name and standalone property
         try {
-          const yaml = require('js-yaml');
+          const yaml = require('yaml');
           const content = await fs.readFile(fullPath, 'utf8');
-          const workflowData = yaml.load(content);
+          const workflowData = yaml.parse(content);
 
           if (workflowData && workflowData.name) {
+            // Workflows are standalone by default unless explicitly false
+            const standalone = workflowData.standalone !== false && workflowData.standalone !== 'false';
             workflows.push({
               name: workflowData.name,
               path: fullPath,
               relativePath: path.relative(dir, fullPath),
               filename: entry.name,
               description: workflowData.description || '',
-              standalone: workflowData.standalone === true, // Check standalone property
+              standalone: standalone,
             });
           }
         } catch {
@@ -410,31 +444,38 @@ class BaseIdeSetup {
         const matchedExt = extensions.find((e) => entry.name.endsWith(e));
         if (matchedExt) {
           // Read file content to check for standalone attribute
-          let standalone = false;
+          // All non-internal files are considered standalone by default
+          let standalone = true;
           try {
             const content = await fs.readFile(fullPath, 'utf8');
 
-            // Check for standalone="true" in XML files
+            // Skip internal/engine files (not user-facing)
+            if (content.includes('internal="true"')) {
+              continue;
+            }
+
+            // Check for explicit standalone: false
             if (entry.name.endsWith('.xml')) {
-              // Look for standalone="true" in the opening tag (task or tool)
-              const standaloneMatch = content.match(/<(?:task|tool)[^>]+standalone="true"/);
-              standalone = !!standaloneMatch;
+              // For XML files, check for standalone="false" attribute
+              const tagMatch = content.match(/<(task|tool)[^>]*standalone="false"/);
+              standalone = !tagMatch;
             } else if (entry.name.endsWith('.md')) {
-              // Check for standalone: true in YAML frontmatter
-              const frontmatterMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
+              // For MD files, parse YAML frontmatter
+              const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
               if (frontmatterMatch) {
-                const yaml = require('js-yaml');
                 try {
-                  const frontmatter = yaml.load(frontmatterMatch[1]);
-                  standalone = frontmatter.standalone === true;
+                  const yaml = require('yaml');
+                  const frontmatter = yaml.parse(frontmatterMatch[1]);
+                  standalone = frontmatter.standalone !== false && frontmatter.standalone !== 'false';
                 } catch {
-                  // Ignore YAML parse errors
+                  // If YAML parsing fails, default to standalone
                 }
               }
+              // No frontmatter means standalone (default)
             }
           } catch {
-            // If we can't read the file, assume not standalone
-            standalone = false;
+            // If we can't read the file, default to standalone
+            standalone = true;
           }
 
           files.push({
@@ -489,23 +530,62 @@ class BaseIdeSetup {
   }
 
   /**
-   * Write file with content
+   * Write file with content (replaces _bmad placeholder)
    * @param {string} filePath - File path
    * @param {string} content - File content
    */
   async writeFile(filePath, content) {
+    // Replace _bmad placeholder if present
+    if (typeof content === 'string' && content.includes('_bmad')) {
+      content = content.replaceAll('_bmad', this.bmadFolderName);
+    }
+
+    // Replace escape sequence _bmad with literal _bmad
+    if (typeof content === 'string' && content.includes('_bmad')) {
+      content = content.replaceAll('_bmad', '_bmad');
+    }
     await this.ensureDir(path.dirname(filePath));
     await fs.writeFile(filePath, content, 'utf8');
   }
 
   /**
-   * Copy file from source to destination
+   * Copy file from source to destination (replaces _bmad placeholder in text files)
    * @param {string} source - Source file path
    * @param {string} dest - Destination file path
    */
   async copyFile(source, dest) {
+    // List of text file extensions that should have placeholder replacement
+    const textExtensions = ['.md', '.yaml', '.yml', '.txt', '.json', '.js', '.ts', '.html', '.css', '.sh', '.bat', '.csv'];
+    const ext = path.extname(source).toLowerCase();
+
     await this.ensureDir(path.dirname(dest));
-    await fs.copy(source, dest, { overwrite: true });
+
+    // Check if this is a text file that might contain placeholders
+    if (textExtensions.includes(ext)) {
+      try {
+        // Read the file content
+        let content = await fs.readFile(source, 'utf8');
+
+        // Replace _bmad placeholder with actual folder name
+        if (content.includes('_bmad')) {
+          content = content.replaceAll('_bmad', this.bmadFolderName);
+        }
+
+        // Replace escape sequence _bmad with literal _bmad
+        if (content.includes('_bmad')) {
+          content = content.replaceAll('_bmad', '_bmad');
+        }
+
+        // Write to dest with replaced content
+        await fs.writeFile(dest, content, 'utf8');
+      } catch {
+        // If reading as text fails, fall back to regular copy
+        await fs.copy(source, dest, { overwrite: true });
+      }
+    } else {
+      // Binary file or other file type - just copy directly
+      await fs.copy(source, dest, { overwrite: true });
+    }
   }
 
   /**
@@ -548,12 +628,25 @@ class BaseIdeSetup {
   }
 
   /**
+   * Flatten a relative path to a single filename for flat slash command naming
+   * @deprecated Use toColonPath() or toDashPath() from shared/path-utils.js instead
+   * Example: 'module/agents/name.md' -> 'bmad-module-agents-name.md'
+   * Used by IDEs that ignore directory structure for slash commands (e.g., Antigravity, Codex)
+   * @param {string} relativePath - Relative path to flatten
+   * @returns {string} Flattened filename with 'bmad-' prefix
+   */
+  flattenFilename(relativePath) {
+    const sanitized = relativePath.replaceAll(/[/\\]/g, '-');
+    return `bmad-${sanitized}`;
+  }
+
+  /**
    * Create agent configuration file
    * @param {string} bmadDir - BMAD installation directory
    * @param {Object} agent - Agent information
    */
   async createAgentConfig(bmadDir, agent) {
-    const agentConfigDir = path.join(bmadDir, '_cfg', 'agents');
+    const agentConfigDir = path.join(bmadDir, '_config', 'agents');
     await this.ensureDir(agentConfigDir);
 
     // Load agent config template

@@ -12,7 +12,7 @@
  */
 
 const { glob } = require('glob');
-const yaml = require('js-yaml');
+const yaml = require('yaml');
 const fs = require('node:fs');
 const path = require('node:path');
 const { validateAgentFile } = require('./schema/agent.js');
@@ -28,7 +28,7 @@ async function main(customProjectRoot) {
   const project_root = customProjectRoot || path.join(__dirname, '..');
 
   // Find all agent files
-  const agentFiles = await glob('src/{core,modules/*}/agents/*.agent.yaml', {
+  const agentFiles = await glob('src/{core,bmm}/agents/**/*.agent.yaml', {
     cwd: project_root,
     absolute: true,
   });
@@ -49,7 +49,7 @@ async function main(customProjectRoot) {
 
     try {
       const fileContent = fs.readFileSync(filePath, 'utf8');
-      const agentData = yaml.load(fileContent);
+      const agentData = yaml.parse(fileContent);
 
       // Convert absolute path to relative src/ path for module detection
       const srcRelativePath = relativePath.startsWith('src/') ? relativePath : path.relative(project_root, filePath).replaceAll('\\', '/');

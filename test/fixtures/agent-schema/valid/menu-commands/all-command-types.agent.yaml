@@ -7,6 +7,7 @@ agent:
     name: All Command Types
     title: All Commands
     icon: 🧪
+    hasSidecar: false
 
   persona:
     role: Test agent with all command types
@@ -34,6 +35,4 @@ agent:
     - trigger: data-test
       description: Test data command
       data: path/to/data
-    - trigger: run-workflow-test
-      description: Test run-workflow command
-      run-workflow: path/to/workflow
+  

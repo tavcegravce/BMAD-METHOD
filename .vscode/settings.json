@@ -21,6 +21,7 @@
     "Decisioning",
     "eksctl",
     "elicitations",
+    "Excalidraw",
     "filecomplete",
     "fintech",
     "fluxcd",
@@ -56,6 +57,7 @@
     "tileset",
     "tmpl",
     "Trae",
+    "Unsharded",
     "VNET"
   ],
   "json.schemas": [
@@ -71,7 +73,7 @@
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
   "[javascript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
+    "editor.defaultFormatter": "vscode.typescript-language-features"
   },
   "[json]": {
     "editor.defaultFormatter": "vscode.json-language-features"

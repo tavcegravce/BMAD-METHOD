@@ -76,36 +76,56 @@ async function getTasksFromBmad(bmadDir, selectedModules = []) {
   return tasks;
 }
 
-async function getAgentsFromDir(dirPath, moduleName) {
+async function getAgentsFromDir(dirPath, moduleName, relativePath = '') {
   const agents = [];
 
   if (!(await fs.pathExists(dirPath))) {
     return agents;
   }
 
-  const files = await fs.readdir(dirPath);
+  const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
-  for (const file of files) {
-    if (!file.endsWith('.md')) {
+  for (const entry of entries) {
+    // Skip if entry.name is undefined or not a string
+    if (!entry.name || typeof entry.name !== 'string') {
       continue;
     }
 
-    if (file.includes('.customize.')) {
-      continue;
+    const fullPath = path.join(dirPath, entry.name);
+    const newRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+
+    if (entry.isDirectory()) {
+      // Recurse into subdirectories
+      const subDirAgents = await getAgentsFromDir(fullPath, moduleName, newRelativePath);
+      agents.push(...subDirAgents);
+    } else if (entry.name.endsWith('.md')) {
+      // Skip README files and other non-agent files
+      if (entry.name.toLowerCase() === 'readme.md' || entry.name.toLowerCase().startsWith('readme-')) {
+        continue;
+      }
+
+      if (entry.name.includes('.customize.')) {
+        continue;
+      }
+
+      const content = await fs.readFile(fullPath, 'utf8');
+
+      if (content.includes('localskip="true"')) {
+        continue;
+      }
+
+      // Only include files that have agent-specific content (compiled agents have <agent> tag)
+      if (!content.includes('<agent')) {
+        continue;
+      }
+
+      agents.push({
+        path: fullPath,
+        name: entry.name.replace('.md', ''),
+        module: moduleName,
+        relativePath: newRelativePath, // Keep the .md extension for the full path
+      });
     }
-
-    const filePath = path.join(dirPath, file);
-    const content = await fs.readFile(filePath, 'utf8');
-
-    if (content.includes('localskip="true"')) {
-      continue;
-    }
-
-    agents.push({
-      path: filePath,
-      name: file.replace('.md', ''),
-      module: moduleName,
-    });
   }
 
   return agents;
@@ -121,13 +141,24 @@ async function getTasksFromDir(dirPath, moduleName) {
   const files = await fs.readdir(dirPath);
 
   for (const file of files) {
-    if (!file.endsWith('.md')) {
+    // Include both .md and .xml task files
+    if (!file.endsWith('.md') && !file.endsWith('.xml')) {
       continue;
     }
 
+    const filePath = path.join(dirPath, file);
+    const content = await fs.readFile(filePath, 'utf8');
+
+    // Skip internal/engine files (not user-facing tasks)
+    if (content.includes('internal="true"')) {
+      continue;
+    }
+
+    // Remove extension to get task name
+    const ext = file.endsWith('.xml') ? '.xml' : '.md';
     tasks.push({
-      path: path.join(dirPath, file),
-      name: file.replace('.md', ''),
+      path: filePath,
+      name: file.replace(ext, ''),
       module: moduleName,
     });
   }

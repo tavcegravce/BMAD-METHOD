@@ -116,7 +116,7 @@ Tests required menu structure:
 
 Tests menu item command targets:
 
-- ✅ Valid: All 7 command types (`workflow`, `validate-workflow`, `exec`, `action`, `tmpl`, `data`, `run-workflow`)
+- ✅ Valid: All 6 command types (`workflow`, `validate-workflow`, `exec`, `action`, `tmpl`, `data`)
 - ✅ Valid: Multiple command targets in one menu item
 - ❌ Invalid: No command target fields
 - ❌ Invalid: Empty string command targets
@@ -224,7 +224,7 @@ See **[MANUAL-TESTING.md](./MANUAL-TESTING.md)** for detailed manual testing pro
 
 Edge cases covered include:
 
-- Malformed module paths (e.g., `src/modules/bmm` without `/agents/`)
+- Malformed module paths (e.g., `src/bmm` without `/agents/`)
 - Empty module names in paths (e.g., `src/modules//agents/`)
 - Whitespace-only module field values
 - All validation error paths
@@ -240,7 +240,7 @@ To add new test cases:
    ```yaml
    # Test: Description of what this tests
    # Expected: PASS (or FAIL - error description)
-   # Path context: src/modules/bmm/agents/test.agent.yaml (if needed)
+   # Path context: src/bmm/agents/test.agent.yaml (if needed)
    ```
 
 3. Run the test suite to verify: `npm test`
@@ -269,7 +269,7 @@ The validation is integrated into the GitHub Actions workflow:
 ## Dependencies
 
 - **zod**: Schema validation library
-- **js-yaml**: YAML parsing
+- **yaml**: YAML parsing
 - **glob**: File pattern matching
 - **c8**: Code coverage reporting
 

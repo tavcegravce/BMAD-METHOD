@@ -10,7 +10,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const yaml = require('js-yaml');
+const yaml = require('yaml');
 const { validateAgentFile } = require('../tools/schema/agent.js');
 const { glob } = require('glob');
 
@@ -182,7 +182,7 @@ function runTest(filePath) {
     let agentData;
 
     try {
-      agentData = yaml.load(fileContent);
+      agentData = yaml.parse(fileContent);
     } catch (parseError) {
       // YAML parse error
       if (shouldPass) {
@@ -209,7 +209,7 @@ function runTest(filePath) {
         // Valid metadata tests: check if filename suggests module or core
         const filename = path.basename(filePath);
         if (filename.includes('module')) {
-          validationPath = 'src/modules/bmm/agents/test.agent.yaml';
+          validationPath = 'src/bmm/agents/test.agent.yaml';
         } else {
           validationPath = 'src/core/agents/test.agent.yaml';
         }
@@ -217,7 +217,7 @@ function runTest(filePath) {
         // Invalid metadata tests: derive from filename
         const filename = path.basename(filePath);
         if (filename.includes('module') || filename.includes('wrong-module')) {
-          validationPath = 'src/modules/bmm/agents/test.agent.yaml';
+          validationPath = 'src/bmm/agents/test.agent.yaml';
         } else if (filename.includes('core')) {
           validationPath = 'src/core/agents/test.agent.yaml';
         } else {

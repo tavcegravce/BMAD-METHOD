@@ -12,10 +12,30 @@ export default [
       'coverage/**',
       '**/*.min.js',
       'test/template-test-generator/**',
-      'test/template-test-generator/**/*.js',
-      'test/template-test-generator/**/*.md',
       'test/fixtures/**',
-      'test/fixtures/**/*.yaml',
+      '_bmad*/**',
+      // Build output
+      'build/**',
+      // Website uses ESM/Astro - separate linting ecosystem
+      'website/**',
+      // Gitignored patterns
+      'z*/**', // z-samples, z1, z2, etc.
+      '.claude/**',
+      '.codex/**',
+      '.github/chatmodes/**',
+      '.agent/**',
+      '.agentvibes/**',
+      '.kiro/**',
+      '.roo/**',
+      'test-project-install/**',
+      'sample-project/**',
+      'tools/template-test-generator/test-scenarios/**',
+      'src/modules/*/sub-modules/**',
+      '.bundler-temp/**',
+      // Augment vendor config — not project code, naming conventions
+      // are dictated by Augment and can't be changed, so exclude
+      // the entire directory from linting
+      '.augment/**',
     ],
   },
 
@@ -61,9 +81,9 @@ export default [
     },
   },
 
-  // CLI/CommonJS scripts under tools/** and test/**
+  // CLI scripts under tools/** and test/**
   {
-    files: ['tools/**/*.js', 'test/**/*.js'],
+    files: ['tools/**/*.js', 'tools/**/*.mjs', 'test/**/*.js', 'test/**/*.mjs'],
     rules: {
       // Allow CommonJS patterns for Node CLI scripts
       'unicorn/prefer-module': 'off',
@@ -90,17 +110,7 @@ export default [
       'no-useless-catch': 'off',
       'unicorn/prefer-number-properties': 'off',
       'no-unreachable': 'off',
-    },
-  },
-
-  // Module installer scripts use CommonJS for compatibility
-  {
-    files: ['**/_module-installer/**/*.js'],
-    rules: {
-      // Allow CommonJS patterns for installer scripts
-      'unicorn/prefer-module': 'off',
-      'n/no-missing-require': 'off',
-      'n/no-unpublished-require': 'off',
+      'unicorn/text-encoding-identifier-case': 'off',
     },
   },
 

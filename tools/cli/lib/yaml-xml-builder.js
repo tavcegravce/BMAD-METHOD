@@ -1,9 +1,10 @@
-const yaml = require('js-yaml');
+const yaml = require('yaml');
 const fs = require('fs-extra');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { AgentAnalyzer } = require('./agent-analyzer');
 const { ActivationBuilder } = require('./activation-builder');
+const { escapeXml } = require('../../lib/xml-utils');
 
 /**
  * Converts agent YAML files to XML format with smart activation injection
@@ -63,13 +64,13 @@ class YamlXmlBuilder {
   async loadAndMergeAgent(agentYamlPath, customizeYamlPath = null) {
     // Load base agent
     const agentContent = await fs.readFile(agentYamlPath, 'utf8');
-    const agentYaml = yaml.load(agentContent);
+    const agentYaml = yaml.parse(agentContent);
 
     // Load customization if exists
     let merged = agentYaml;
     if (customizeYamlPath && (await fs.pathExists(customizeYamlPath))) {
       const customizeContent = await fs.readFile(customizeYamlPath, 'utf8');
-      const customizeYaml = yaml.load(customizeContent);
+      const customizeYaml = yaml.parse(customizeContent);
 
       if (customizeYaml) {
         // Special handling: persona fields are merged, but only non-empty values override
@@ -118,6 +119,16 @@ class YamlXmlBuilder {
         // Append critical actions
         if (customizeYaml.critical_actions) {
           merged.agent.critical_actions = [...(merged.agent.critical_actions || []), ...customizeYaml.critical_actions];
+        }
+
+        // Append prompts
+        if (customizeYaml.prompts) {
+          merged.agent.prompts = [...(merged.agent.prompts || []), ...customizeYaml.prompts];
+        }
+
+        // Append memories
+        if (customizeYaml.memories) {
+          merged.agent.memories = [...(merged.agent.memories || []), ...customizeYaml.memories];
         }
       }
     }
@@ -202,6 +213,11 @@ class YamlXmlBuilder {
     // Persona section
     xml += this.buildPersonaXml(agent.persona);
 
+    // Memories section (if exists)
+    if (agent.memories) {
+      xml += this.buildMemoriesXml(agent.memories);
+    }
+
     // Prompts section (if exists)
     if (agent.prompts) {
       xml += this.buildPromptsXml(agent.prompts);
@@ -209,27 +225,12 @@ class YamlXmlBuilder {
 
     // Menu section (support both 'menu' and legacy 'commands')
     const menuItems = agent.menu || agent.commands || [];
-    xml += this.buildCommandsXml(menuItems);
+    xml += this.buildCommandsXml(menuItems, buildMetadata.forWebBundle);
 
     xml += '</agent>\n';
     xml += '```\n';
 
     return xml;
-  }
-
-  /**
-   * Build metadata comment
-   */
-  buildMetadataComment(metadata) {
-    const lines = ['<!-- BUILD-META', `  source: ${metadata.sourceFile || 'unknown'} (hash: ${metadata.sourceHash || 'unknown'})`];
-
-    if (metadata.customizeFile) {
-      lines.push(`  customize: ${metadata.customizeFile} (hash: ${metadata.customizeHash || 'unknown'})`);
-    }
-
-    lines.push(`  built: ${new Date().toISOString()}`, `  builder-version: ${metadata.builderVersion || '1.0.0'}`, '-->\n');
-
-    return lines.join('\n');
   }
 
   /**
@@ -241,15 +242,15 @@ class YamlXmlBuilder {
     let xml = '  <persona>\n';
 
     if (persona.role) {
-      xml += `    <role>${this.escapeXml(persona.role)}</role>\n`;
+      xml += `    <role>${escapeXml(persona.role)}</role>\n`;
     }
 
     if (persona.identity) {
-      xml += `    <identity>${this.escapeXml(persona.identity)}</identity>\n`;
+      xml += `    <identity>${escapeXml(persona.identity)}</identity>\n`;
     }
 
     if (persona.communication_style) {
-      xml += `    <communication_style>${this.escapeXml(persona.communication_style)}</communication_style>\n`;
+      xml += `    <communication_style>${escapeXml(persona.communication_style)}</communication_style>\n`;
     }
 
     if (persona.principles) {
@@ -260,7 +261,7 @@ class YamlXmlBuilder {
       } else {
         principlesText = persona.principles;
       }
-      xml += `    <principles>${this.escapeXml(principlesText)}</principles>\n`;
+      xml += `    <principles>${escapeXml(principlesText)}</principles>\n`;
     }
 
     xml += '  </persona>\n';
@@ -269,18 +270,53 @@ class YamlXmlBuilder {
   }
 
   /**
+   * Build memories XML section
+   */
+  buildMemoriesXml(memories) {
+    if (!memories || memories.length === 0) return '';
+
+    let xml = '  <memories>\n';
+
+    for (const memory of memories) {
+      xml += `    <memory>${escapeXml(memory)}</memory>\n`;
+    }
+
+    xml += '  </memories>\n';
+
+    return xml;
+  }
+
+  /**
    * Build prompts XML section
+   * Handles both array format and object/dictionary format
    */
   buildPromptsXml(prompts) {
-    if (!prompts || prompts.length === 0) return '';
+    if (!prompts) return '';
+
+    // Handle object/dictionary format: { promptId: 'content', ... }
+    // Convert to array format for processing
+    let promptsArray = prompts;
+    if (!Array.isArray(prompts)) {
+      // Check if it's an object with no length property (dictionary format)
+      if (typeof prompts === 'object' && prompts.length === undefined) {
+        promptsArray = Object.entries(prompts).map(([id, content]) => ({
+          id: id,
+          content: content,
+        }));
+      } else {
+        return ''; // Not a valid prompts format
+      }
+    }
+
+    if (promptsArray.length === 0) return '';
 
     let xml = '  <prompts>\n';
 
-    for (const prompt of prompts) {
+    for (const prompt of promptsArray) {
       xml += `    <prompt id="${prompt.id || ''}">\n`;
-      xml += `      <![CDATA[\n`;
-      xml += `      ${prompt.content || ''}\n`;
-      xml += `      ]]>\n`;
+      xml += `      <content>\n`;
+      xml += `${escapeXml(prompt.content || '')}\n`;
+      xml += `      </content>\n`;
       xml += `    </prompt>\n`;
     }
 
@@ -292,38 +328,67 @@ class YamlXmlBuilder {
   /**
    * Build menu XML section (renamed from commands for clarity)
    * Auto-injects *help and *exit, adds * prefix to all triggers
+   * Supports both legacy format and new multi format with nested handlers
+   * @param {Array} menuItems - Menu items from YAML
+   * @param {boolean} forWebBundle - Whether building for web bundle
    */
-  buildCommandsXml(menuItems) {
+  buildCommandsXml(menuItems, forWebBundle = false) {
     let xml = '  <menu>\n';
 
-    // Always inject *help first
-    xml += `    <item cmd="*help">Show numbered menu</item>\n`;
+    // Always inject menu display option first
+    xml += `    <item cmd="*menu">[M] Redisplay Menu Options</item>\n`;
 
     // Add user-defined menu items with * prefix
     if (menuItems && menuItems.length > 0) {
       for (const item of menuItems) {
-        // Build command attributes - add * prefix if not present
-        let trigger = item.trigger || '';
-        if (!trigger.startsWith('*')) {
-          trigger = '*' + trigger;
+        // Skip ide-only items when building for web bundles
+        if (forWebBundle && item['ide-only'] === true) {
+          continue;
+        }
+        // Skip web-only items when NOT building for web bundles (i.e., IDE/local installation)
+        if (!forWebBundle && item['web-only'] === true) {
+          continue;
         }
 
-        const attrs = [`cmd="${trigger}"`];
+        // Handle multi format menu items with nested handlers
+        if (item.multi && item.triggers && Array.isArray(item.triggers)) {
+          xml += `    <item type="multi">${escapeXml(item.multi)}\n`;
+          xml += this.buildNestedHandlers(item.triggers);
+          xml += `    </item>\n`;
+        }
+        // Handle legacy format menu items
+        else if (item.trigger) {
+          // For legacy items, keep using cmd with *<trigger> format
+          let trigger = item.trigger || '';
+          if (!trigger.startsWith('*')) {
+            trigger = '*' + trigger;
+          }
 
-        // Add handler attributes
-        if (item.workflow) attrs.push(`workflow="${item.workflow}"`);
-        if (item['validate-workflow']) attrs.push(`validate-workflow="${item['validate-workflow']}"`);
-        if (item.exec) attrs.push(`exec="${item.exec}"`);
-        if (item.tmpl) attrs.push(`tmpl="${item.tmpl}"`);
-        if (item.data) attrs.push(`data="${item.data}"`);
-        if (item.action) attrs.push(`action="${item.action}"`);
+          const attrs = [`cmd="${trigger}"`];
 
-        xml += `    <item ${attrs.join(' ')}>${this.escapeXml(item.description || '')}</item>\n`;
+          // Add handler attributes
+          // If workflow-install exists, use its value for workflow attribute (vendoring)
+          // workflow-install is build-time metadata - tells installer where to copy workflows
+          // The final XML should only have workflow pointing to the install location
+          if (item['workflow-install']) {
+            attrs.push(`workflow="${item['workflow-install']}"`);
+          } else if (item.workflow) {
+            attrs.push(`workflow="${item.workflow}"`);
+          }
+
+          if (item['validate-workflow']) attrs.push(`validate-workflow="${item['validate-workflow']}"`);
+          if (item.exec) attrs.push(`exec="${item.exec}"`);
+          if (item.tmpl) attrs.push(`tmpl="${item.tmpl}"`);
+          if (item.data) attrs.push(`data="${item.data}"`);
+          if (item.action) attrs.push(`action="${item.action}"`);
+
+          xml += `    <item ${attrs.join(' ')}>${escapeXml(item.description || '')}</item>\n`;
+        }
       }
     }
 
-    // Always inject *exit last
-    xml += `    <item cmd="*exit">Exit with confirmation</item>\n`;
+    // Always inject dismiss last
+    xml += `    <item cmd="*dismiss">[D] Dismiss Agent</item>\n`;
 
     xml += '  </menu>\n';
 
@@ -331,16 +396,91 @@ class YamlXmlBuilder {
   }
 
   /**
-   * Escape XML special characters
+   * Build nested handlers for multi format menu items
+   * @param {Array} triggers - Triggers array from multi format
+   * @returns {string} Handler XML
    */
-  escapeXml(text) {
-    if (!text) return '';
-    return text
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&apos;');
+  buildNestedHandlers(triggers) {
+    let xml = '';
+
+    for (const triggerGroup of triggers) {
+      for (const [triggerName, execArray] of Object.entries(triggerGroup)) {
+        // Build trigger with * prefix
+        let trigger = triggerName.startsWith('*') ? triggerName : '*' + triggerName;
+
+        // Extract the relevant execution data
+        const execData = this.processExecArray(execArray);
+
+        // For nested handlers in multi items, we don't need cmd attribute
+        // The match attribute will handle fuzzy matching
+        const attrs = [`match="${escapeXml(execData.description || '')}"`];
+
+        // Add handler attributes based on exec data
+        if (execData.route) attrs.push(`exec="${execData.route}"`);
+        if (execData.workflow) attrs.push(`workflow="${execData.workflow}"`);
+        if (execData['validate-workflow']) attrs.push(`validate-workflow="${execData['validate-workflow']}"`);
+        if (execData.action) attrs.push(`action="${execData.action}"`);
+        if (execData.data) attrs.push(`data="${execData.data}"`);
+        if (execData.tmpl) attrs.push(`tmpl="${execData.tmpl}"`);
+        // Only add type if it's not 'exec' (exec is already implied by the exec attribute)
+        if (execData.type && execData.type !== 'exec') attrs.push(`type="${execData.type}"`);
+
+        xml += `      <handler ${attrs.join(' ')}></handler>\n`;
+      }
+    }
+
+    return xml;
+  }
+
+  /**
+   * Process the execution array from multi format triggers
+   * Extracts relevant data for XML attributes
+   * @param {Array} execArray - Array of execution objects
+   * @returns {Object} Processed execution data
+   */
+  processExecArray(execArray) {
+    const result = {
+      description: '',
+      route: null,
+      workflow: null,
+      data: null,
+      action: null,
+      type: null,
+    };
+
+    if (!Array.isArray(execArray)) {
+      return result;
+    }
+
+    for (const exec of execArray) {
+      if (exec.input) {
+        // Use input as description if no explicit description is provided
+        result.description = exec.input;
+      }
+
+      if (exec.route) {
+        // Determine if it's a workflow or exec based on file extension or context
+        if (exec.route.endsWith('.yaml') || exec.route.endsWith('.yml')) {
+          result.workflow = exec.route;
+        } else {
+          result.route = exec.route;
+        }
+      }
+
+      if (exec.data !== null && exec.data !== undefined) {
+        result.data = exec.data;
+      }
+
+      if (exec.action) {
+        result.action = exec.action;
+      }
+
+      if (exec.type) {
+        result.type = exec.type;
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -372,12 +512,14 @@ class YamlXmlBuilder {
 
     // Extract module from path (e.g., /path/to/modules/bmm/agents/pm.yaml -> bmm)
     // or /path/to/bmad/bmm/agents/pm.yaml -> bmm
+    // or /path/to/src/bmm/agents/pm.yaml -> bmm
     let module = 'core'; // default to core
     const pathParts = agentYamlPath.split(path.sep);
 
     // Look for module indicators in the path
     const modulesIndex = pathParts.indexOf('modules');
     const bmadIndex = pathParts.indexOf('bmad');
+    const srcIndex = pathParts.indexOf('src');
 
     if (modulesIndex !== -1 && pathParts[modulesIndex + 1]) {
       // Path contains /modules/{module}/
@@ -385,8 +527,14 @@ class YamlXmlBuilder {
     } else if (bmadIndex !== -1 && pathParts[bmadIndex + 1]) {
       // Path contains /bmad/{module}/
       const potentialModule = pathParts[bmadIndex + 1];
-      // Check if it's a known module, not 'agents' or '_cfg'
+      // Check if it's a known module, not 'agents' or '_config'
       if (['bmm', 'bmb', 'cis', 'core'].includes(potentialModule)) {
+        module = potentialModule;
+      }
+    } else if (srcIndex !== -1 && pathParts[srcIndex + 1]) {
+      // Path contains /src/{module}/ (bmm and core are directly under src/)
+      const potentialModule = pathParts[srcIndex + 1];
+      if (potentialModule === 'bmm' || potentialModule === 'core') {
         module = potentialModule;
       }
     }

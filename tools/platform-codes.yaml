@@ -55,6 +55,24 @@ platforms:
     category: ide
     description: "Enhanced Cline fork"
 
+  rovo:
+    name: "Rovo"
+    preferred: false
+    category: ide
+    description: "Atlassian's AI coding assistant"
+
+  rovo-dev:
+    name: "Rovo Dev"
+    preferred: false
+    category: ide
+    description: "Atlassian's Rovo development environment"
+
+  kiro:
+    name: "Kiro"
+    preferred: false
+    category: ide
+    description: "Amazon's AI-powered IDE"
+
   github-copilot:
     name: "GitHub Copilot"
     preferred: false
@@ -96,6 +114,12 @@ platforms:
     preferred: false
     category: ide
     description: "AI development assistant"
+
+  antigravity:
+    name: "Google Antigravity"
+    preferred: false
+    category: ide
+    description: "Google's AI development environment"
 
   trae:
     name: "Trae"

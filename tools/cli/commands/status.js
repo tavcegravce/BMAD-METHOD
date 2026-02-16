@@ -1,46 +1,64 @@
-const chalk = require('chalk');
+const path = require('node:path');
+const prompts = require('../lib/prompts');
 const { Installer } = require('../installers/lib/core/installer');
+const { Manifest } = require('../installers/lib/core/manifest');
+const { UI } = require('../lib/ui');
 
 const installer = new Installer();
+const manifest = new Manifest();
+const ui = new UI();
 
 module.exports = {
   command: 'status',
-  description: 'Show installation status',
-  options: [['-d, --directory <path>', 'Installation directory', '.']],
+  description: 'Display BMAD installation status and module versions',
+  options: [],
   action: async (options) => {
     try {
-      const status = await installer.getStatus(options.directory);
+      // Find the bmad directory
+      const projectDir = process.cwd();
+      const { bmadDir } = await installer.findBmadDir(projectDir);
 
-      if (!status.installed) {
-        console.log(chalk.yellow('\n⚠️  No BMAD installation found in:'), options.directory);
-        console.log(chalk.dim('Run "bmad install" to set up BMAD Method'));
+      // Check if bmad directory exists
+      const fs = require('fs-extra');
+      if (!(await fs.pathExists(bmadDir))) {
+        await prompts.log.warn('No BMAD installation found in the current directory.');
+        await prompts.log.message(`Expected location: ${bmadDir}`);
+        await prompts.log.message('Run "bmad install" to set up a new installation.');
         process.exit(0);
+        return;
       }
 
-      console.log(chalk.cyan('\n📊 BMAD Installation Status\n'));
-      console.log(chalk.bold('Location:'), status.path);
-      console.log(chalk.bold('Version:'), status.version);
-      console.log(chalk.bold('Core:'), status.hasCore ? chalk.green('✓ Installed') : chalk.red('✗ Not installed'));
+      // Read manifest
+      const manifestData = await manifest._readRaw(bmadDir);
 
-      if (status.modules.length > 0) {
-        console.log(chalk.bold('\nModules:'));
-        for (const mod of status.modules) {
-          console.log(`  ${chalk.green('✓')} ${mod.id} (v${mod.version})`);
-        }
-      } else {
-        console.log(chalk.bold('\nModules:'), chalk.dim('None installed'));
+      if (!manifestData) {
+        await prompts.log.warn('No BMAD installation manifest found.');
+        await prompts.log.message('Run "bmad install" to set up a new installation.');
+        process.exit(0);
+        return;
       }
 
-      if (status.ides.length > 0) {
-        console.log(chalk.bold('\nConfigured IDEs:'));
-        for (const ide of status.ides) {
-          console.log(`  ${chalk.green('✓')} ${ide}`);
-        }
-      }
+      // Get installation info
+      const installation = manifestData.installation || {};
+      const modules = manifestData.modules || [];
+
+      // Check for available updates (only for external modules)
+      const availableUpdates = await manifest.checkForUpdates(bmadDir);
+
+      // Display status
+      await ui.displayStatus({
+        installation,
+        modules,
+        availableUpdates,
+        bmadDir,
+      });
 
       process.exit(0);
     } catch (error) {
-      console.error(chalk.red('Error:'), error.message);
+      await prompts.log.error(`Status check failed: ${error.message}`);
+      if (process.env.BMAD_DEBUG) {
+        await prompts.log.message(error.stack);
+      }
       process.exit(1);
     }
   },
